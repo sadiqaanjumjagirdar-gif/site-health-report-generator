@@ -33,6 +33,8 @@ def generate_header_nav_report():
         # Fetch locale homepage
         try:
             resp = session.get(page_url, headers=headers, timeout=15)
+            session = get_session()
+            session.max_redirects = 5
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
         except Exception as e:
