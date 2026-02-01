@@ -18,12 +18,7 @@ def generate_header_nav_report():
     # ✅ 7 locales with labels
     sites = [
         ("EN", "https://www.micron.com/"),
-        ("TW", "https://tw.micron.com/"),
-        ("CN", "https://cn.micron.com"),
-        ("SG", "https://sg.micron.com/"),
-        ("MY", "https://my.micron.com/"),
-        ("IN", "https://in.micron.com/"),
-        ("JP", "https://jp.micron.com/"),
+        
     ]
 
     all_rows = []
