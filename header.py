@@ -1,13 +1,12 @@
-import requests
-from bs4 import BeautifulSoup, Tag
 import pandas as pd
+from bs4 import BeautifulSoup, Tag
 from urllib.parse import urljoin
 
+from http_client import get_session
+
+
 def generate_header_nav_report():
-    proxies = {
-        "http": "http://proxy-web.micron.com:80",
-        "https": "http://proxy-web.micron.com:80",
-    }
+    session = get_session()
 
     headers = {
         "User-Agent": (
@@ -18,15 +17,14 @@ def generate_header_nav_report():
 
     # ✅ 7 locales with labels
     sites = [
-         ("EN", "https://www.micron.com/"),
-        ("TW",     "https://tw.micron.com/"),
-        ("CN",     "https://cn.micron.com"),
-        ("SG",     "https://sg.micron.com/"),
-        ("MY",     "https://my.micron.com/"),
-        ("IN",     "https://in.micron.com/"),
-        ("JP",     "https://jp.micron.com/"),  
+        ("EN", "https://www.micron.com/"),
+        ("TW", "https://tw.micron.com/"),
+        ("CN", "https://cn.micron.com"),
+        ("SG", "https://sg.micron.com/"),
+        ("MY", "https://my.micron.com/"),
+        ("IN", "https://in.micron.com/"),
+        ("JP", "https://jp.micron.com/"),
     ]
-    
 
     all_rows = []
     broken_rows = []
@@ -34,10 +32,10 @@ def generate_header_nav_report():
     for country, page_url in sites:
         # Fetch locale homepage
         try:
-            resp = requests.get(page_url, headers=headers, proxies=proxies, timeout=15)
+            resp = session.get(page_url, headers=headers, timeout=15)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
-        except requests.RequestException as e:
+        except Exception as e:
             row = {
                 "Country": country,
                 "Page URL": page_url,
@@ -58,7 +56,7 @@ def generate_header_nav_report():
             text = a.get_text(strip=True)
 
             # Skip non-links
-            if not href or href.startswith("#") or href.lower().startswith(("javascript:", "mailto:", "tel:")):
+            if (not href) or href.startswith("#") or href.lower().startswith(("javascript:", "mailto:", "tel:")):
                 continue
 
             # Resolve relative links per locale
@@ -69,26 +67,12 @@ def generate_header_nav_report():
 
             try:
                 # HEAD first for speed; fallback to GET if blocked
-                r = requests.head(
-                    link_url,
-                    headers=headers,
-                    proxies=proxies,
-                    allow_redirects=True,
-                    timeout=15
-                )
+                r = session.head(link_url, headers=headers, allow_redirects=True, timeout=15)
                 status_code = r.status_code
-
                 if status_code in (403, 405):
-                    r = requests.get(
-                        link_url,
-                        headers=headers,
-                        proxies=proxies,
-                        allow_redirects=True,
-                        timeout=15
-                    )
+                    r = session.get(link_url, headers=headers, allow_redirects=True, timeout=15)
                     status_code = r.status_code
-
-            except requests.RequestException as e:
+            except Exception as e:
                 error = str(e)
 
             row = {
@@ -97,9 +81,8 @@ def generate_header_nav_report():
                 "Link Text": text,
                 "Link URL": link_url,
                 "Status Code": status_code,
-                "Error": error
+                "Error": error,
             }
-
             all_rows.append(row)
 
             # Broken = request error OR HTTP >= 400
@@ -116,5 +99,4 @@ def generate_header_nav_report():
         f"Total links: {len(all_rows)}. Broken: {len(broken_rows)}. "
         f"Saved: {excel_filename}"
     )
-
     return summary, broken_rows

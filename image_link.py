@@ -1,50 +1,133 @@
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
+import os
+import certifi
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin
 
-def generate_image_link_report():
-    sitemap_url = "https://www.micron.com/sitemap.xml"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.76 Safari/537.36'
-    }
-    response = requests.get(sitemap_url, headers=headers)
-    response.raise_for_status()
-    sitemap_xml = response.text
-    root = ET.fromstring(sitemap_xml)
-    namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-    urls = []
-    for url in root.findall('ns:url', namespace):
-        loc_tag = url.find('ns:loc', namespace)
-        if loc_tag is not None and loc_tag.text and "part-detail" not in loc_tag.text:
-            urls.append(loc_tag.text)
+from bs4 import BeautifulSoup
 
-    broken_images = []
-    for url in urls:
+from http_client import get_session
+
+
+def generate_image_link_report():
+    """
+    Crawl Micron sitemap pages and find broken image links.
+
+    Returns:
+        summary (str)
+        broken_items (list[dict])  # keys: 'Page URL', 'Broken Image URL', 'Error'
+    """
+
+    session = get_session()
+
+    sitemap_url = os.getenv("SITEMAP_URL", "https://www.micron.com/sitemap.xml")
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/56.0.2924.76 Safari/537.36"
+        )
+    }
+
+    # Optional limit to avoid long runs on Render
+    # Set MAX_SITEMAP_PAGES=0 to scan all
+    try:
+        max_pages = int(os.getenv("MAX_SITEMAP_PAGES", "250"))
+    except ValueError:
+        max_pages = 250
+
+    # Fetch sitemap safely
+    try:
+        resp = session.get(
+            sitemap_url,
+            headers=headers,
+            verify=certifi.where(),
+            timeout=30
+        )
+        resp.raise_for_status()
+        root = ET.fromstring(resp.text)
+    except Exception as e:
+        return f"Failed to fetch sitemap: {e}", []
+
+    namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    urls = []
+
+    for url_node in root.findall("ns:url", namespace):
+        loc_tag = url_node.find("ns:loc", namespace)
+        if loc_tag is not None and loc_tag.text:
+            loc = loc_tag.text.strip()
+            if "part-detail" not in loc:
+                urls.append(loc)
+
+    if max_pages > 0:
+        urls = urls[:max_pages]
+
+    broken_items = []
+    pages_checked = 0
+    images_checked = 0
+
+    for page_url in urls:
+        pages_checked += 1
+
+        # Fetch page HTML
         try:
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            for img in soup.find_all('img', src=True):
-                src = img['src']
-                if src.startswith('/'):
-                    src = urljoin(url, src)
-                try:
-                    img_response = requests.head(src, headers=headers, allow_redirects=True)
-                    if img_response.status_code >= 400:
-                        broken_images.append([url, src, img_response.status_code])
-                except requests.RequestException as e:
-                    broken_images.append([url, src, str(e)])
-        except requests.RequestException as e:
+            page_resp = session.get(
+                page_url,
+                headers=headers,
+                verify=certifi.where(),
+                timeout=30
+            )
+            page_resp.raise_for_status()
+        except Exception:
+            # Skip page failures; report focuses on broken images
             continue
 
-    broken_df = pd.DataFrame(broken_images, columns=['Page URL', 'Broken Image URL', 'Error'])
-    excel_filename = "broken_image_links.xlsx"
-    broken_df.to_excel(excel_filename, index=False)
-    #return f"Checked {len(urls)} pages. Found {len(broken_images)} broken images. See {excel_filename} for details."
-    
-    
-    summary = f"Checked {len(urls)} pages. Found {len(broken_images)} broken images. See {excel_filename} for details."
-    # Return summary and details (all broken images)
-    return summary, broken_images
+        soup = BeautifulSoup(page_resp.text, "html.parser")
+
+        for img in soup.find_all("img", src=True):
+            src = (img.get("src") or "").strip()
+            if not src:
+                continue
+
+            img_url = urljoin(page_url, src) if src.startswith("/") else src
+            images_checked += 1
+
+            try:
+                r = session.head(
+                    img_url,
+                    headers=headers,
+                    allow_redirects=True,
+                    verify=certifi.where(),
+                    timeout=20
+                )
+                status = r.status_code
+
+                # Some servers block HEAD
+                if status in (403, 405):
+                    r = session.get(
+                        img_url,
+                        headers=headers,
+                        allow_redirects=True,
+                        verify=certifi.where(),
+                        timeout=20
+                    )
+                    status = r.status_code
+
+                if status >= 400:
+                    broken_items.append({
+                        "Page URL": page_url,
+                        "Broken Image URL": img_url,
+                        "Error": status
+                    })
+
+            except Exception as e:
+                broken_items.append({
+                    "Page URL": page_url,
+                    "Broken Image URL": img_url,
+                    "Error": str(e)
+                })
+
+    summary = (
+        f"Checked {pages_checked} pages. "
+        f"Checked {images_checked} images. "
+        f"Broken images found: {len(broken_items)}."
+    )
+    return summary, broken_items

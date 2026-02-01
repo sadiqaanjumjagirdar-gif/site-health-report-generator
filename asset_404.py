@@ -1,23 +1,19 @@
 # asset_404.py
-import requests
+import certifi
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-import certifi
+
+from http_client import get_session
 
 MAX_INPUT_URLS = 20  # ✅ Only 20 URLs allowed at a time (comma-separated or newline-separated)
 
 
 def _normalize_input_urls(raw: str):
-    """
-    Accepts URLs separated by newlines OR commas.
-    Adds https:// if missing.
-    Max 20 enforced in generate_asset_404_report().
-    """
+    """Accept URLs separated by newlines OR commas. Adds https:// if missing."""
     if not raw:
         return []
 
     urls = []
-    # Support comma-separated and newline-separated
     for chunk in raw.replace(",", "\n").splitlines():
         u = chunk.strip()
         if not u:
@@ -39,9 +35,7 @@ def _normalize_input_urls(raw: str):
 
 
 def _extract_srcset_urls(srcset: str):
-    """
-    Parse srcset="url1 1x, url2 2x" -> ["url1", "url2"]
-    """
+    """Parse srcset='url1 1x, url2 2x' -> ['url1', 'url2']"""
     if not srcset:
         return []
     out = []
@@ -67,63 +61,52 @@ def _is_image(url: str):
     return any(url_l.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif"])
 
 
-def _check_url_status(url: str, headers, proxies, timeout=15):
+def _check_url_status(session, url: str, headers, timeout=15):
     """
     HEAD first for speed; fallback to GET for 403/405 or HEAD failures.
-    Returns (status_code:int|None, error:str).
+    Returns (status_code:int|None, error:str)
     """
     try:
-        r = requests.head(
+        r = session.head(
             url,
             headers=headers,
-            proxies=proxies,
             allow_redirects=True,
             verify=certifi.where(),
-            timeout=timeout
+            timeout=timeout,
         )
         status = r.status_code
-
-        # Some servers block HEAD
         if status in (403, 405):
-            r = requests.get(
+            r = session.get(
                 url,
                 headers=headers,
-                proxies=proxies,
                 allow_redirects=True,
                 verify=certifi.where(),
-                timeout=timeout
+                timeout=timeout,
             )
             status = r.status_code
-
         return status, ""
-    except requests.RequestException as e:
-        # Try GET once if HEAD failed
+    except Exception:
         try:
-            r = requests.get(
+            r = session.get(
                 url,
                 headers=headers,
-                proxies=proxies,
                 allow_redirects=True,
                 verify=certifi.where(),
-                timeout=timeout
+                timeout=timeout,
             )
             return r.status_code, ""
-        except requests.RequestException as e2:
+        except Exception as e2:
             return None, str(e2)
 
 
 def generate_asset_404_report(raw_urls: str):
     """
-    User provides up to 20 URLs (comma-separated or one per line).
-    For each page:
-      - extract all links (<a href>), images (<img src/srcset>, <source srcset>), and PDFs
-      - check each extracted asset
-      - return ONLY assets that respond with HTTP 404 (one row per 404)
+    User provides up to 20 URLs. For each page:
+    - extract all <a href>, <img src/srcset>, <source srcset> assets
+    - check each extracted asset
+    - return ONLY assets that respond with HTTP 404
     """
-    proxies = {
-        "http": "http://proxy-web.micron.com:80",
-        "https": "http://proxy-web.micron.com:80",
-    }
+    session = get_session()
 
     headers = {
         "User-Agent": (
@@ -133,7 +116,6 @@ def generate_asset_404_report(raw_urls: str):
     }
 
     page_urls = _normalize_input_urls(raw_urls)
-
     if not page_urls:
         return "No URLs provided for Asset 404 check.", []
 
@@ -149,28 +131,27 @@ def generate_asset_404_report(raw_urls: str):
 
         # Fetch the page HTML
         try:
-            resp = requests.get(
+            resp = session.get(
                 page_url,
                 headers=headers,
-                proxies=proxies,
                 allow_redirects=True,
                 verify=certifi.where(),
-                timeout=20
+                timeout=20,
             )
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
-        except requests.RequestException as e:
-            # If the page itself fails, log an informational row (not necessarily 404 assets)
-            broken_404.append({
-                "Input Page": page_url,
-                "Asset Type": "PAGE",
-                "Asset URL": page_url,
-                "Status Code": getattr(getattr(e, "response", None), "status_code", ""),
-                "Error": f"Failed to fetch page: {e}"
-            })
+        except Exception as e:
+            broken_404.append(
+                {
+                    "Input Page": page_url,
+                    "Asset Type": "PAGE",
+                    "Asset URL": page_url,
+                    "Status Code": getattr(getattr(e, "response", None), "status_code", ""),
+                    "Error": f"Failed to fetch page: {e}",
+                }
+            )
             continue
 
-        # Collect assets (dedupe per page for speed)
         assets = set()
 
         # --- Links (<a href>) ---
@@ -187,7 +168,6 @@ def generate_asset_404_report(raw_urls: str):
             src = (img.get("src") or img.get("data-src") or "").strip()
             if src:
                 assets.add(urljoin(page_url, src))
-
             srcset = (img.get("srcset") or img.get("data-srcset") or "").strip()
             for u in _extract_srcset_urls(srcset):
                 assets.add(urljoin(page_url, u))
@@ -201,8 +181,7 @@ def generate_asset_404_report(raw_urls: str):
         # Check each asset; store ONLY 404 rows
         for asset_url in sorted(assets):
             assets_checked += 1
-            status, err = _check_url_status(asset_url, headers=headers, proxies=proxies)
-
+            status, err = _check_url_status(session, asset_url, headers=headers)
             if status == 404:
                 if _is_pdf(asset_url):
                     asset_type = "PDF"
@@ -211,13 +190,15 @@ def generate_asset_404_report(raw_urls: str):
                 else:
                     asset_type = "Link"
 
-                broken_404.append({
-                    "Input Page": page_url,
-                    "Asset Type": asset_type,
-                    "Asset URL": asset_url,
-                    "Status Code": status,
-                    "Error": err
-                })
+                broken_404.append(
+                    {
+                        "Input Page": page_url,
+                        "Asset Type": asset_type,
+                        "Asset URL": asset_url,
+                        "Status Code": status,
+                        "Error": err,
+                    }
+                )
 
     summary = (
         f"Asset 404 check completed. Pages checked: {pages_checked}. "
