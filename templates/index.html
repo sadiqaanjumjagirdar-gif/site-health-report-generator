@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Site Health Report Generator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+
+<body>
+  <div class="container">
+    <h1>📊 Site Health Report Generator</h1>
+    <p class="subtitle">Select the checks you want to run and generate a detailed report.</p>
+
+    <form id="report-form" method="POST" class="form-card">
+
+      <div class="section">
+        <h3>Reports</h3>
+        <div class="checkbox-group">
+          <label><input type="checkbox" name="report" value="broken-link"> Broken Link Report</label>
+          <label><input type="checkbox" name="report" value="header"> Header Navigation Broken Links</label>
+          <label><input type="checkbox" name="report" value="footer"> Footer Navigation Broken Links</label>
+          <label><input type="checkbox" name="report" value="image"> Image Broken Links</label>
+          <label><input type="checkbox" name="report" value="metadata"> Metadata Empty Report</label>
+          <label><input type="checkbox" name="report" value="pdf"> PDF Broken Links</label>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Advanced Options</h3>
+
+        <label>
+          <input type="checkbox" name="report" value="find-text-url">
+          Find Text in URL
+        </label>
+        <input class="input-field" type="text" name="find_text_url" placeholder="Enter text to find in URL"/>
+
+        <label>
+          <input type="checkbox" name="report" value="find-text-pdf">
+          Find Text in PDF
+        </label>
+        <input class="input-field" type="text" name="find_text_pdf" placeholder="Enter text to find in PDF"/>
+
+        <hr style="margin: 16px 0; opacity: 0.4;">
+
+        <!-- ✅ NEW: Asset 404 report option -->
+        <label>
+          <input type="checkbox" name="report" value="asset-404">
+          Asset 404 Check (Extract Links + Images + PDFs from given URLs)
+        </label>
+
+        <!-- ✅ NEW: URL input box -->
+        <textarea class="input-field"
+                  name="asset_urls"
+                  rows="6"
+                  placeholder="Enter up to 20 URLs (comma-separated OR one per line).
+Example:
+https://www.micron.com/, https://www.micron.com/in
+https://www.micron.com/sg"></textarea>
+
+        <small style="display:block; margin-top:6px; opacity:0.8;">
+          Note: You can paste URLs separated by commas or new lines. Max 20 URLs per run.
+        </small>
+      </div>
+
+      <button id="generate-button" type="submit" class="primary-btn">Generate Report</button>
+
+      <div id="message-box" class="message-box"></div>
+      <div class="spinner" id="spinner" style="display:none;"></div>
+      <div id="loading-text" style="display:none;" class="loading-text">⏳ Generating your report...</div>
+
+    </form>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const spinner = document.getElementById('spinner');
+      const loadingText = document.getElementById('loading-text');
+      const messageBox = document.getElementById('message-box');
+      const reportForm = document.getElementById('report-form');
+
+      reportForm.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        spinner.style.display = 'block';
+        loadingText.style.display = 'block';
+        messageBox.innerText = '';
+
+        const formData = new FormData(reportForm);
+
+        try {
+          const response = await fetch('/', {
+            method: 'POST',
+            body: formData
+          });
+
+          if (response.ok) {
+            // Download the Excel file
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'site_report.xlsx'; // ✅ match Flask download_name
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+
+            messageBox.style.color = 'green';
+            messageBox.innerText = '✅ Report generated and downloaded successfully.';
+          } else {
+            const errorText = await response.text();
+            messageBox.style.color = 'red';
+            messageBox.innerText = '❌ ' + errorText;
+          }
+        } catch (error) {
+          messageBox.style.color = 'red';
+          messageBox.innerText = '❌ ' + error.message;
+        } finally {
+          spinner.style.display = 'none';
+          loadingText.style.display = 'none';
+        }
+      });
+    });
+  </script>
+</body>
+</html>

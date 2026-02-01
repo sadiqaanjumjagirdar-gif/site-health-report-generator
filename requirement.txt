@@ -1,0 +1,9 @@
+Flask
+openpyxl
+pandas
+requests
+beautifulsoup4
+PyMuPDF
+certifi
+gunicorn
+lxml
